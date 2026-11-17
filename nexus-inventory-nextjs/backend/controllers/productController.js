@@ -161,11 +161,12 @@ exports.createProduct = asyncHandler(async (req, res, next) => {
     }
 
     // Create product
+    const initialQty = Number(quantity) || 0;
     const productData = {
         name,
         description,
         category,
-        quantity: quantity || 0,
+        quantity: 0,
         unit: unit || 'piece',
         minStockLevel: minStockLevel || 10,
         maxStockLevel,
@@ -178,7 +179,7 @@ exports.createProduct = asyncHandler(async (req, res, next) => {
         createdBy: req.user._id
     };
 
-    const product = await Product.create(productData);
+    let product = await Product.create(productData);
 
     // Generate QR code
     const baseUrl = process.env.SERVER_URL || `${req.protocol}://${req.get('host')}`;
@@ -191,12 +192,12 @@ exports.createProduct = asyncHandler(async (req, res, next) => {
     };
     await product.save();
 
-    // Create initial inventory log if quantity > 0
-    if (quantity > 0) {
-        await inventoryService.updateStock(
+    // Create initial inventory log and set stock if initialQty > 0
+    if (initialQty > 0) {
+        const stockResult = await inventoryService.updateStock(
             product._id,
             'STOCK_IN',
-            quantity,
+            initialQty,
             req.user,
             {
                 reason: 'Initial stock',
@@ -205,6 +206,7 @@ exports.createProduct = asyncHandler(async (req, res, next) => {
                 userAgent: req.get('user-agent')
             }
         );
+        product = stockResult.product;
     }
 
     // Log audit
@@ -240,16 +242,50 @@ exports.updateProduct = asyncHandler(async (req, res, next) => {
     // Store old data for audit
     const oldData = product.toObject();
 
-    // Update fields
+    // Validate category if updating category
+    if (req.body.category) {
+        const categoryExists = await Category.findById(req.body.category);
+        if (!categoryExists) {
+            throw new ValidationError('Invalid category');
+        }
+    }
+
+    // Handle quantity update via inventoryService to ensure transactions and inventory logging
+    let quantityChanged = false;
+    const oldQuantity = product.quantity;
+    let newQuantity = product.quantity;
+
+    if (req.body.quantity !== undefined && req.body.quantity !== null && req.body.quantity !== '') {
+        const targetQuantity = Number(req.body.quantity);
+        if (!isNaN(targetQuantity) && targetQuantity >= 0 && targetQuantity !== product.quantity) {
+            quantityChanged = true;
+            newQuantity = targetQuantity;
+            const stockResult = await inventoryService.updateStock(
+                product._id,
+                'ADJUSTMENT',
+                targetQuantity,
+                req.user,
+                {
+                    reason: req.body.notes || 'Product quantity manual update',
+                    transactionType: 'adjustment',
+                    ipAddress: req.ip,
+                    userAgent: req.get('user-agent')
+                }
+            );
+            product = stockResult.product;
+        }
+    }
+
+    // Update non-quantity fields
     const fieldsToUpdate = {
         name: req.body.name,
         description: req.body.description,
         category: req.body.category,
         unit: req.body.unit,
-        minStockLevel: req.body.minStockLevel,
-        maxStockLevel: req.body.maxStockLevel,
-        costPrice: req.body.costPrice,
-        sellingPrice: req.body.sellingPrice,
+        minStockLevel: req.body.minStockLevel !== undefined ? Number(req.body.minStockLevel) : undefined,
+        maxStockLevel: req.body.maxStockLevel !== undefined ? Number(req.body.maxStockLevel) : undefined,
+        costPrice: req.body.costPrice !== undefined ? Number(req.body.costPrice) : undefined,
+        sellingPrice: req.body.sellingPrice !== undefined ? Number(req.body.sellingPrice) : undefined,
         location: req.body.location,
         supplier: req.body.supplier,
         barcode: req.body.barcode,
@@ -262,18 +298,33 @@ exports.updateProduct = asyncHandler(async (req, res, next) => {
         fieldsToUpdate[key] === undefined && delete fieldsToUpdate[key]
     );
 
-    // Update product
-    product = await Product.findByIdAndUpdate(
-        req.params.id,
-        fieldsToUpdate,
-        {
-            new: true,
-            runValidators: true
-        }
-    ).populate('category', 'name code');
+    // Apply fields to product document
+    Object.assign(product, fieldsToUpdate);
+
+    // Recalculate status based on current quantity and minStockLevel
+    if (product.quantity <= 0) {
+        product.status = STOCK_STATUS.OUT_OF_STOCK;
+    } else if (product.quantity <= product.minStockLevel) {
+        product.status = STOCK_STATUS.LOW_STOCK;
+    } else {
+        product.status = STOCK_STATUS.IN_STOCK;
+    }
+
+    // Save product document
+    await product.save();
+
+    // Populate category for response
+    await product.populate('category', 'name code');
 
     // Track changes for audit
     const changes = [];
+    if (quantityChanged) {
+        changes.push({
+            field: 'quantity',
+            oldValue: oldQuantity,
+            newValue: newQuantity
+        });
+    }
     Object.keys(fieldsToUpdate).forEach(key => {
         if (oldData[key] !== product[key]) {
             changes.push({

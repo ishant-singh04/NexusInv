@@ -152,10 +152,31 @@ const getPermissionsByRole = (role) => {
     return permissions[role] || [];
 };
 
+// Rate limiting window helper
+const getRateLimitWindowMs = (val) => {
+    const DEFAULT_WINDOW_MS = 15 * 60 * 1000; // 900,000 ms (15 minutes)
+    if (!val) return DEFAULT_WINDOW_MS;
+
+    // Check if it's a pure numeric string (digits only)
+    if (typeof val === 'string' && /^\d+$/.test(val.trim())) {
+        const parsed = parseInt(val.trim(), 10);
+        return parsed >= 1000 ? parsed : DEFAULT_WINDOW_MS;
+    }
+
+    if (typeof val === 'number' && !isNaN(val)) {
+        return val >= 1000 ? val : DEFAULT_WINDOW_MS;
+    }
+
+    // Invalid, NaN, expressions like "15*60*1000", or values < 1000ms
+    return DEFAULT_WINDOW_MS;
+};
+
+exports.getRateLimitWindowMs = getRateLimitWindowMs;
+
 // Rate limiting middleware
 exports.rateLimiter = require('express-rate-limit')({
-    windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000, // 15 minutes
-    max: parseInt(process.env.RATE_LIMIT_MAX) || 100, // limit each IP to 100 requests per windowMs
+    windowMs: getRateLimitWindowMs(process.env.RATE_LIMIT_WINDOW_MS),
+    max: parseInt(process.env.RATE_LIMIT_MAX, 10) || 100, // limit each IP to 100 requests per windowMs
     message: 'Too many requests from this IP, please try again later.',
     standardHeaders: true,
     legacyHeaders: false

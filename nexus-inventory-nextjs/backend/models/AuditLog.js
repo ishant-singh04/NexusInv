@@ -15,7 +15,8 @@ const AuditLogSchema = new mongoose.Schema({
             'IMPORT',
             'DOWNLOAD',
             'UPLOAD',
-            'SCAN'
+            'SCAN',
+            'ALERT'
         ]
     },
     

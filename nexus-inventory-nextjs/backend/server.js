@@ -35,20 +35,39 @@ app.use(helmet({
 }));
 app.use(cors({
     origin: (origin, callback) => {
-        const allowedOrigins = [
-            'http://localhost:3000',
-            'http://localhost:5173',
-            'http://localhost:3001',
-            process.env.FRONTEND_URL,
-            'https://inventry-management-system-ten.vercel.app'
-        ];
-        // Allow requests with no origin (like mobile apps or curl requests)
+        // Allow requests with no origin (like mobile apps, curl, server-to-server)
         if (!origin) return callback(null, true);
-        if (allowedOrigins.indexOf(origin) === -1) {
-            const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
-            return callback(new Error(msg), false);
+
+        const allowedOrigins = [];
+
+        if (process.env.NODE_ENV === 'production') {
+            if (process.env.FRONTEND_URL) {
+                const normalizedFrontend = process.env.FRONTEND_URL.trim().replace(/\/+$/, '');
+                if (normalizedFrontend) {
+                    allowedOrigins.push(normalizedFrontend);
+                }
+            }
+        } else {
+            // Development origins
+            allowedOrigins.push(
+                'http://localhost:3000',
+                'http://localhost:5173',
+                'http://localhost:3001'
+            );
+            if (process.env.FRONTEND_URL) {
+                const normalizedFrontend = process.env.FRONTEND_URL.trim().replace(/\/+$/, '');
+                if (normalizedFrontend && !allowedOrigins.includes(normalizedFrontend)) {
+                    allowedOrigins.push(normalizedFrontend);
+                }
+            }
         }
-        return callback(null, true);
+
+        if (allowedOrigins.includes(origin)) {
+            return callback(null, true);
+        }
+
+        const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
+        return callback(new Error(msg), false);
     },
     credentials: true
 }));

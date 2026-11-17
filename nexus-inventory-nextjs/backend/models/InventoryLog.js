@@ -37,7 +37,7 @@ const InventoryLogSchema = new mongoose.Schema({
     quantity: {
         type: Number,
         required: [true, 'Please provide quantity'],
-        min: [0.01, 'Quantity must be greater than 0']
+        min: [0, 'Quantity cannot be negative']
     },
 
     previousQuantity: {
